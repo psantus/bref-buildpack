@@ -21,10 +21,15 @@ jobs:
           chmod +x tests/run_tests.sh
           ./tests/run_tests.sh
 
-      - name: Build stack images
+      - name: Build stack images (amd64)
         run: |
-          docker build -f stack/build.Dockerfile -t bref-buildpack/build .
-          docker build -f stack/run.Dockerfile -t bref-buildpack/run .
+          # CI runs on x86_64, so use the non-ARM Bref images
+          docker build -f stack/build.Dockerfile \
+            --build-arg BREF_IMAGE=bref/build-php-84:3 \
+            -t bref-buildpack/build .
+          docker build -f stack/run.Dockerfile \
+            --build-arg BREF_IMAGE=bref/php-84:3 \
+            -t bref-buildpack/run .
 
       - name: Create builder
         run: |

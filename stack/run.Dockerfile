@@ -1,4 +1,5 @@
-FROM bref/arm-php-84:3
+ARG BREF_IMAGE=bref/arm-php-84:3
+FROM ${BREF_IMAGE}
 
 # CNB requires specific labels and environment variables
 LABEL io.buildpacks.stack.id="io.bref.lambda"
