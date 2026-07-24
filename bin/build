@@ -297,17 +297,13 @@ EOL
 fi
 
 # =============================================================================
-# STEP 5: Place Application at /var/task for Lambda
+# STEP 5: Application Layer
 # =============================================================================
-log_step "Placing application at /var/task (Lambda requirement)"
+log_step "Preparing application layer"
 
-# Lambda's LAMBDA_TASK_ROOT is /var/task and cannot be overridden.
-# The CNB lifecycle places the app at /workspace, but Bref's bootstrap
-# resolves the handler relative to /var/task. We copy the app there.
-rm -rf /var/task 2>/dev/null || true
-cp -a "$(pwd)" /var/task
-
-log_info "Application copied to /var/task"
+# The application source stays at /workspace (CNB default).
+# For Lambda deployment, the 'make lambda' flatten step copies it to /var/task.
+# This separation keeps the buildpack CNB-compliant while supporting Lambda.
 
 app_layer="${CNB_LAYERS_DIR}/app"
 mkdir -p "${app_layer}"
@@ -372,5 +368,4 @@ echo "     Handler:      ${HANDLER}"
 echo "     Extensions:   ${BREF_EXTENSIONS:-none}"
 echo "     OPcache:      ${OPCACHE_ENABLE} (JIT: ${OPCACHE_JIT})"
 echo "     Symfony:      ${is_symfony}"
-echo "     App path:     /var/task"
 echo ""
