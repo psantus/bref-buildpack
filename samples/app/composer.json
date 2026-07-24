@@ -1,8 +1,14 @@
 {
     "name": "bref/sample-app",
-    "description": "Minimal sample app for CI testing",
+    "description": "Minimal sample app for buildpack CI testing",
+    "type": "project",
     "require": {
-        "php": ">=8.4",
-        "bref/bref": "^2.0"
+        "php": ">=8.2"
+    },
+    "autoload": {
+        "psr-4": { "App\\": "src/" }
+    },
+    "scripts": {
+        "shrink-vendor": "echo 'shrink-vendor: nothing to do'"
     }
 }

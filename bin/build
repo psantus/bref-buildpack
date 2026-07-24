@@ -198,10 +198,19 @@ else
     log_info "Installing dependencies: composer install ${COMPOSER_FLAGS}"
 
     if command -v composer &>/dev/null; then
-        # shellcheck disable=SC2086
-        composer install ${COMPOSER_FLAGS} --no-interaction --prefer-dist 2>&1 | while read -r line; do
-            echo "       ${line}"
-        done
+        # Use 'install' if lock file exists, otherwise 'update' to generate one
+        if [[ -f "composer.lock" ]]; then
+            # shellcheck disable=SC2086
+            composer install ${COMPOSER_FLAGS} --no-interaction --prefer-dist 2>&1 | while read -r line; do
+                echo "       ${line}"
+            done
+        else
+            log_info "No composer.lock found — running composer update"
+            # shellcheck disable=SC2086
+            composer update ${COMPOSER_FLAGS} --no-interaction --prefer-dist 2>&1 | while read -r line; do
+                echo "       ${line}"
+            done
+        fi
     else
         log_info "ERROR: composer not found in build image."
         exit 1
