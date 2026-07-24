@@ -5,7 +5,7 @@ A [Cloud Native Buildpack](https://buildpacks.io/) that builds PHP applications 
 **Replace your multi-stage Dockerfile with a single command:**
 
 ```bash
-pack build my-lambda-image --builder bref-builder --path ./my-php-app
+make lambda TEST_APP_PATH=./my-php-app LAMBDA_IMAGE=my-lambda
 ```
 
 ## What It Does
@@ -21,49 +21,51 @@ This buildpack automates what you'd typically hand-craft in a Dockerfile:
 
 ## Quick Start
 
-### 1. Install Pack CLI
+### 1. Install Prerequisites
 
 ```bash
 brew install buildpacks/tap/pack
+# Docker must be running
 ```
 
-### 2. Create the Builder
+### 2. Build & Deploy
 
 ```bash
 cd bref-buildpack/
-pack builder create bref-builder --config builder.toml
+
+# One-shot: build + flatten + push to ECR
+make lambda \
+  TEST_APP_PATH=~/my-symfony-app \
+  LAMBDA_IMAGE=my-app \
+  BP_BREF_RUNTIME=fpm \
+  BP_BREF_EXTENSIONS=redis,gd \
+  BP_OPCACHE_JIT=true
+
+make push \
+  LAMBDA_IMAGE=my-app \
+  ECR_REPO=123456789.dkr.ecr.eu-west-1.amazonaws.com/my-app \
+  AWS_PROFILE=myprofile \
+  AWS_REGION=eu-west-1
 ```
 
-### 3. Build Your App
+### 3. Create/Update Lambda
 
 ```bash
-# Minimal — auto-detects everything
-pack build my-lambda \
-  --builder bref-builder \
-  --path ~/my-symfony-app
+# Create a new Lambda function
+aws lambda create-function \
+  --function-name my-app \
+  --package-type Image \
+  --code ImageUri=123456789.dkr.ecr.eu-west-1.amazonaws.com/my-app:latest \
+  --role arn:aws:iam::123456789:role/my-lambda-role \
+  --architectures arm64 \
+  --memory-size 1024 \
+  --timeout 28 \
+  --environment "Variables={BREF_RUNTIME=fpm,APP_ENV=prod}"
 
-# With configuration
-pack build my-lambda \
-  --builder bref-builder \
-  --path ~/my-symfony-app \
-  --env BP_PHP_VERSION=84 \
-  --env BP_BREF_EXTENSIONS=redis,gd,imagick \
-  --env BP_BREF_RUNTIME=fpm \
-  --env BP_OPCACHE_JIT=true
-```
-
-### 4. Deploy to Lambda
-
-```bash
-# Push to ECR
-aws ecr get-login-password | docker login --username AWS --password-stdin <account>.dkr.ecr.<region>.amazonaws.com
-docker tag my-lambda:latest <account>.dkr.ecr.<region>.amazonaws.com/my-lambda:latest
-docker push <account>.dkr.ecr.<region>.amazonaws.com/my-lambda:latest
-
-# Update Lambda function
+# Or update an existing one
 aws lambda update-function-code \
-  --function-name my-function \
-  --image-uri <account>.dkr.ecr.<region>.amazonaws.com/my-lambda:latest
+  --function-name my-app \
+  --image-uri 123456789.dkr.ecr.eu-west-1.amazonaws.com/my-app:latest
 ```
 
 ## Configuration
@@ -83,9 +85,9 @@ All configuration is via build-time environment variables (prefix `BP_`):
 | `BP_VENDOR_SHRINK` | `true` | Run `shrink-vendor` composer script if available |
 | `BP_BREF_ARCH` | `arm` | Architecture: `arm` (Graviton) or empty (x86_64) |
 
-### Using project.toml (recommended)
+### Using project.toml (recommended for apps)
 
-Instead of passing `--env` flags every time, create a `project.toml` in your app root:
+Create a `project.toml` in your app root instead of passing `--env` flags:
 
 ```toml
 [_]
@@ -103,27 +105,44 @@ See `samples/project.toml` for a complete example.
 
 ## Available Extensions
 
-All extensions from [bref/extra-php-extensions](https://github.com/brefphp/extra-php-extensions) are supported:
+All 40+ extensions from [bref/extra-php-extensions](https://github.com/brefphp/extra-php-extensions) are supported:
 
 `amqp`, `blackfire`, `calendar`, `cassandra`, `decimal`, `ds`, `excimer`, `gd`, `gnupg`, `gmp`, `grpc`, `h3`, `igbinary`, `imagick`, `imap`, `ldap`, `mailparse`, `maxminddb`, `memcache`, `memcached`, `mongodb`, `msgpack`, `newrelic`, `odbc-snowflake`, `openswoole`, `opentelemetry`, `oci8`, `pcov`, `pgsql`, `rdkafka`, `redis`, `redis-igbinary`, `relay`, `scoutapm`, `scrypt`, `snmp`, `spx`, `ssh2`, `swoole`, `sqlsrv`, `tidy`, `uuid`, `xdebug`, `xlswriter`, `xmlrpc`, `yaml`
+
+## Makefile Targets
+
+| Target | Description |
+|--------|-------------|
+| `make stack` | Build CNB-compatible base images from Bref |
+| `make builder` | Create the `pack` builder (includes stack) |
+| `make build` | Build an app image using the buildpack |
+| `make lambda` | Build + flatten for Lambda (single command) |
+| `make push` | Tag and push to ECR |
+| `make test` | Build + verify image content |
+| `make clean` | Remove generated images |
 
 ## Architecture
 
 ```
 bref-buildpack/
-├── buildpack.toml              # Buildpack descriptor
+├── buildpack.toml              # Buildpack descriptor (API 0.10)
+├── builder.toml                # Builder config (build + run images)
+├── package.toml                # For distributing as OCI image
+├── Makefile                    # Build/test/deploy workflow
 ├── bin/
-│   ├── detect                  # Detection logic (composer.json + bref/bref)
-│   └── build                   # Build logic (extensions, composer, opcache, symfony)
-├── builder.toml                # Builder definition (build + run images)
+│   ├── detect*                 # Detects composer.json + bref/bref
+│   └── build*                  # Extensions, composer, opcache, symfony, /var/task
+├── stack/
+│   ├── build.Dockerfile        # CNB-labeled build image (bref/arm-build-php-84:3)
+│   └── run.Dockerfile          # CNB-labeled run image (bref/arm-php-84:3)
 ├── extensions/
 │   └── bref-php-version/       # Image extension for PHP version switching
 │       ├── extension.toml
 │       └── bin/
-│           ├── detect
-│           └── generate        # Generates run.Dockerfile
+│           ├── detect*
+│           └── generate*
 ├── samples/
-│   └── project.toml            # Example app configuration
+│   └── project.toml            # Example config for app developers
 └── README.md
 ```
 
@@ -131,36 +150,40 @@ bref-buildpack/
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     pack build my-lambda                      │
+│                        make lambda                            │
 ├─────────────────────────────────────────────────────────────┤
 │                                                              │
-│  Build Image: bref/arm-build-php-84:3                       │
-│  (has phpize, gcc, make, composer — can compile extensions)  │
+│  1. pack build (using CNB lifecycle)                         │
+│     Build Image: bref/arm-build-php-84:3                    │
+│     ┌──────────┐   ┌─────────┐   ┌─────────┐              │
+│     │extensions│ → │composer │ → │symfony  │               │
+│     │  (cached)│   │ (cached)│   │ warmup  │               │
+│     └──────────┘   └─────────┘   └─────────┘              │
 │                                                              │
-│  ┌─────────┐   ┌──────────┐   ┌─────────┐   ┌───────────┐ │
-│  │ detect  │ → │extensions│ → │composer │ → │ symfony   │  │
-│  │         │   │  layer   │   │  layer  │   │ warmup    │  │
-│  └─────────┘   └──────────┘   └─────────┘   └───────────┘  │
+│  2. Flatten for Lambda                                       │
+│     - Copy /workspace → /var/task                           │
+│     - ENTRYPOINT = /lambda-entrypoint.sh                    │
+│     - CMD = public/index.php                                │
+│     - Build without OCI attestations                         │
 │                                                              │
 ├─────────────────────────────────────────────────────────────┤
 │                                                              │
-│  Run Image: bref/arm-php-84:3                               │
-│  (Lambda bootstrap + PHP runtime — production minimal)       │
-│                                                              │
-│  Final image = run image + layers from build                 │
+│  Result: Lambda-native container image                       │
+│  Run Image: bref/arm-php-84:3 (PHP 8.4, Lambda bootstrap)  │
 │                                                              │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### Layers (Cached)
+### Build Layers (Cached Between Builds)
 
-| Layer | Cached | Launch | Contents |
-|-------|--------|--------|----------|
-| `extensions` | ✓ | ✓ | PHP extension `.so` files + config |
-| `opcache` | ✓ | ✓ | OPcache/JIT ini configuration |
-| `vendor` | ✓ | ✓ | Composer dependencies |
-| `symfony-cache` | ✗ | ✓ | Compiled DI container + cached routes |
-| `app` | ✗ | ✓ | Application source code |
+| Layer | Cached | Contents |
+|-------|--------|----------|
+| `extensions` | ✓ | PHP extension `.so` files + ini configs |
+| `opcache` | ✓ | OPcache/JIT configuration |
+| `vendor` | ✓ | Composer dependencies (invalidated on `composer.lock` change) |
+| `symfony-cache` | ✗ | Compiled DI container + cached routes |
+| `app` | ✗ | Application source code |
+| `env` | ✗ | BREF_RUNTIME environment variable |
 
 ## Comparison: Dockerfile vs Buildpack
 
@@ -170,8 +193,7 @@ bref-buildpack/
 FROM bref/arm-build-php-84:3 AS ext-gd
 RUN dnf -y install libwebp-devel libpng-devel ...
 WORKDIR ${PHP_BUILD_DIR}/ext/gd
-RUN phpize && ./configure ... && make -j$(nproc) && make install
-RUN cp ... /tmp/gd.so
+RUN phpize && ./configure ... && make && make install
 # ... repeat for each extension ...
 
 FROM composer:2.8 AS vendors
@@ -185,46 +207,59 @@ COPY . /var/task
 RUN php bin/console cache:warmup ...
 ```
 
-### After (Buildpack — zero Dockerfile)
+### After (Buildpack)
 
 ```toml
 # project.toml
 [io.buildpacks.build.env]
-  BP_PHP_VERSION = "84"
   BP_BREF_EXTENSIONS = "gd"
   BP_BREF_RUNTIME = "fpm"
 ```
 
 ```bash
-pack build my-lambda --builder bref-builder
+make lambda TEST_APP_PATH=. LAMBDA_IMAGE=my-app
 ```
 
-## Multiple Lambda Functions
+## Multiple Lambda Functions (Bref v3 Unified Image)
 
-Bref v3 supports a single unified image with runtime selection via `BREF_RUNTIME` env var. Build once, deploy to multiple functions:
+Bref v3 supports a single image with runtime selection via `BREF_RUNTIME`. Build once, deploy to multiple functions:
 
 ```bash
 # Build once
-pack build my-app-lambda --builder bref-builder --env BP_BREF_RUNTIME=function
+make lambda TEST_APP_PATH=./my-app LAMBDA_IMAGE=my-app
 
-# Deploy as FPM (API Gateway)
-aws lambda update-function-configuration --function-name api \
+# Deploy as FPM (API Gateway HTTP)
+aws lambda create-function --function-name api \
+  --image-uri <ecr>/my-app:latest \
   --environment "Variables={BREF_RUNTIME=fpm}"
 
-# Deploy as Console
-aws lambda update-function-configuration --function-name console \
+# Deploy as Console (CLI commands)
+aws lambda create-function --function-name console \
+  --image-uri <ecr>/my-app:latest \
   --environment "Variables={BREF_RUNTIME=console}"
 
 # Deploy as Worker (SQS consumer)
-aws lambda update-function-configuration --function-name worker \
+aws lambda create-function --function-name worker \
+  --image-uri <ecr>/my-app:latest \
   --environment "Variables={BREF_RUNTIME=function}"
 ```
+
+## Known Constraints
+
+1. **Static assets need CloudFront/S3** — Lambda (via function URL or API Gateway) only serves dynamic PHP responses. CSS/JS/images must be uploaded to S3 and served via CloudFront, same as with a standard Bref Dockerfile deployment.
+
+2. **Flatten step required** — The CNB lifecycle adds metadata layers and a launcher binary that Lambda doesn't support. The `make lambda` target handles this automatically by producing a clean image with the Bref entrypoint.
+
+3. **Extensions via Docker-in-Docker** — Installing bref-extra extensions requires Docker access during build (to pull extension images). If running in a CI environment without Docker, pre-bake extensions into a custom build image instead.
+
+4. **PHP version = builder rebuild** — Changing PHP version requires rebuilding the stack images (they're based on `bref/arm-build-php-XX:3` and `bref/arm-php-XX:3`). The image extension provides a mechanism for this but requires the target images to be pre-built.
 
 ## Requirements
 
 - [Pack CLI](https://buildpacks.io/docs/for-platform-operators/how-to/integrate-ci/pack/) v0.32+
-- Docker (for building)
+- Docker
 - A PHP application with `bref/bref` in `composer.json`
+- AWS CLI (for deployment)
 
 ## License
 

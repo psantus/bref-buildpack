@@ -10,8 +10,8 @@ set -eo pipefail
 #   3. Runs composer install with production optimizations (cached layer)
 #   4. Optionally runs vendor shrink scripts
 #   5. Detects and warms Symfony cache (if applicable)
-#   6. Copies application to /var/task
-#   7. Sets the launch command
+#   6. Places application at /var/task for Lambda compatibility
+#   7. Sets the launch command using Bref's entrypoint
 # =============================================================================
 
 echo "===> Bref PHP Lambda Buildpack"
@@ -81,7 +81,6 @@ php_version = "${PHP_VERSION}"
 EOL
 else
     log_step "No extra extensions requested (BP_BREF_EXTENSIONS is empty)"
-    # Still create the layer toml so lifecycle doesn't complain
     cat > "${CNB_LAYERS_DIR}/extensions.toml" << EOL
 [types]
 cache = false
@@ -97,9 +96,14 @@ if [[ "${OPCACHE_ENABLE}" == "true" ]]; then
     log_step "Configuring OPcache for Lambda"
 
     opcache_layer="${CNB_LAYERS_DIR}/opcache"
-    mkdir -p "${opcache_layer}/etc/php/conf.d"
+    mkdir -p "${opcache_layer}"
 
-    cat > "${opcache_layer}/etc/php/conf.d/opcache-buildpack.ini" << EOL
+    # Write OPcache config directly to /opt/bref/etc/php/conf.d/ where PHP scans
+    # This path is set by extension_dir and PHP_INI_SCAN_DIR in the Bref base image
+    local_ini="/opt/bref/etc/php/conf.d/opcache-buildpack.ini"
+
+    cat > "${local_ini}" << EOL
+; Buildpack OPcache configuration for Lambda cold start optimization
 opcache.enable=1
 opcache.enable_cli=1
 opcache.memory_consumption=1024
@@ -110,16 +114,18 @@ EOL
 
     if [[ "${OPCACHE_JIT}" == "true" ]]; then
         log_info "JIT enabled (opcache.jit=1255, buffer=128M)"
-        cat >> "${opcache_layer}/etc/php/conf.d/opcache-buildpack.ini" << EOL
+        cat >> "${local_ini}" << EOL
 opcache.jit=1255
 opcache.jit_buffer_size=128M
 EOL
     fi
 
-    # Also write to the Bref PHP ini scan directory for immediate pickup
-    if [[ -d "/opt/bref/etc/php/conf.d" ]]; then
-        cp "${opcache_layer}/etc/php/conf.d/opcache-buildpack.ini" /opt/bref/etc/php/conf.d/opcache-buildpack.ini
-    fi
+    # Also store a copy in the layer for reference/caching
+    mkdir -p "${opcache_layer}/opt/bref/etc/php/conf.d"
+    cp "${local_ini}" "${opcache_layer}/opt/bref/etc/php/conf.d/opcache-buildpack.ini"
+
+    log_info "Wrote OPcache config to ${local_ini}"
+    log_info "Settings: memory=1024M, max_files=20000, validate_timestamps=0"
 
     cat > "${CNB_LAYERS_DIR}/opcache.toml" << EOL
 [types]
@@ -156,18 +162,17 @@ if [[ "${composer_lock_sha}" == "${cached_lock_sha}" && -d "${vendor_layer}/vend
 else
     log_info "Installing dependencies: composer install ${COMPOSER_FLAGS}"
 
-    # If composer is available, run install
     if command -v composer &>/dev/null; then
         # shellcheck disable=SC2086
         composer install ${COMPOSER_FLAGS} --no-interaction --prefer-dist 2>&1 | while read -r line; do
             echo "       ${line}"
         done
     else
-        log_info "WARNING: composer not found in build image. Ensure build image has composer."
+        log_info "ERROR: composer not found in build image."
         exit 1
     fi
 
-    # Move vendor to the layer for caching
+    # Copy vendor to the layer for caching
     if [[ -d "vendor" ]]; then
         rm -rf "${vendor_layer}/vendor"
         cp -a vendor "${vendor_layer}/vendor"
@@ -177,7 +182,6 @@ fi
 # --- Vendor shrink ---
 if [[ "${VENDOR_SHRINK}" == "true" ]]; then
     if command -v composer &>/dev/null; then
-        # Check if shrink-vendor script exists in composer.json
         has_shrink=$(jq -r '.scripts["shrink-vendor"] // empty' composer.json 2>/dev/null || echo "")
         if [[ -n "${has_shrink}" ]]; then
             log_info "Running vendor shrink script"
@@ -249,16 +253,20 @@ EOL
 fi
 
 # =============================================================================
-# STEP 5: Application Layer
+# STEP 5: Place Application at /var/task for Lambda
 # =============================================================================
-log_step "Preparing application for Lambda"
+log_step "Placing application at /var/task (Lambda requirement)"
+
+# Lambda's LAMBDA_TASK_ROOT is /var/task and cannot be overridden.
+# The CNB lifecycle places the app at /workspace, but Bref's bootstrap
+# resolves the handler relative to /var/task. We copy the app there.
+rm -rf /var/task 2>/dev/null || true
+cp -a "$(pwd)" /var/task
+
+log_info "Application copied to /var/task"
 
 app_layer="${CNB_LAYERS_DIR}/app"
 mkdir -p "${app_layer}"
-
-# The application source is already in the workspace.
-# For Lambda, the handler expects code at /var/task which is the default WORKDIR in Bref images.
-# The CNB lifecycle will place the app layer appropriately.
 
 cat > "${CNB_LAYERS_DIR}/app.toml" << EOL
 [types]
@@ -267,37 +275,46 @@ launch = true
 EOL
 
 # =============================================================================
-# STEP 6: Launch Configuration
+# STEP 6: Environment & Launch Configuration
 # =============================================================================
-log_step "Setting launch process (handler: ${HANDLER}, runtime: ${BREF_RUNTIME})"
+log_step "Configuring launch (handler: ${HANDLER}, runtime: ${BREF_RUNTIME})"
 
-# Set BREF_RUNTIME environment variable for the run image
-# CNB requires env files inside a named layer
-mkdir -p "${CNB_LAYERS_DIR}/config/env.launch"
-echo -n "${BREF_RUNTIME}" > "${CNB_LAYERS_DIR}/config/env.launch/BREF_RUNTIME"
-# Override LAMBDA_TASK_ROOT so Bref finds the app at CNB's workspace path
-echo -n "/workspace" > "${CNB_LAYERS_DIR}/config/env.launch/LAMBDA_TASK_ROOT.default"
+# --- Set environment variables via CNB layer ---
+# BREF_RUNTIME tells the Bref bootstrap which runtime class to use
+env_layer="${CNB_LAYERS_DIR}/env"
+mkdir -p "${env_layer}/env.launch"
+echo -n "${BREF_RUNTIME}" > "${env_layer}/env.launch/BREF_RUNTIME"
 
-cat > "${CNB_LAYERS_DIR}/config.toml" << EOL
+cat > "${CNB_LAYERS_DIR}/env.toml" << EOL
 [types]
 cache = false
 launch = true
+build = false
 EOL
 
-# Write launch.toml with process types
+# --- Launch process ---
+# The Bref entrypoint (/lambda-entrypoint.sh) is the standard Lambda container
+# entrypoint. It receives the handler as CMD. The CNB launcher is NOT used
+# for Lambda — instead we invoke the Bref entrypoint directly.
 cat > "${CNB_LAYERS_DIR}/launch.toml" << EOL
 [[processes]]
 type = "web"
-command = ["${HANDLER}"]
+command = ["/lambda-entrypoint.sh"]
+args = ["${HANDLER}"]
 default = true
+direct = true
 
 [[processes]]
 type = "console"
-command = ["bin/console"]
+command = ["/lambda-entrypoint.sh"]
+args = ["bin/console"]
+direct = true
 
 [[processes]]
 type = "worker"
-command = ["bin/consumer.php"]
+command = ["/lambda-entrypoint.sh"]
+args = ["bin/consumer.php"]
+direct = true
 EOL
 
 # =============================================================================
@@ -311,4 +328,5 @@ echo "     Handler:      ${HANDLER}"
 echo "     Extensions:   ${BREF_EXTENSIONS:-none}"
 echo "     OPcache:      ${OPCACHE_ENABLE} (JIT: ${OPCACHE_JIT})"
 echo "     Symfony:      ${is_symfony}"
+echo "     App path:     /var/task"
 echo ""
