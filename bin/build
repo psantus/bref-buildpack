@@ -334,27 +334,21 @@ EOL
 
 # --- Launch process ---
 # The Bref entrypoint (/lambda-entrypoint.sh) is the standard Lambda container
-# entrypoint. It receives the handler as CMD. The CNB launcher is NOT used
-# for Lambda — instead we invoke the Bref entrypoint directly.
+# entrypoint. It receives the handler as CMD. For Lambda deployment, the
+# flatten step overrides the entrypoint. Here we define processes for CNB.
 cat > "${CNB_LAYERS_DIR}/launch.toml" << EOL
 [[processes]]
 type = "web"
-command = ["/lambda-entrypoint.sh"]
-args = ["${HANDLER}"]
+command = ["${HANDLER}"]
 default = true
-direct = true
 
 [[processes]]
 type = "console"
-command = ["/lambda-entrypoint.sh"]
-args = ["bin/console"]
-direct = true
+command = ["bin/console"]
 
 [[processes]]
 type = "worker"
-command = ["/lambda-entrypoint.sh"]
-args = ["bin/consumer.php"]
-direct = true
+command = ["bin/consumer.php"]
 EOL
 
 # =============================================================================

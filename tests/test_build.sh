@@ -182,10 +182,10 @@ else
     fail "launch.toml missing web process"
 fi
 
-if grep -q '/lambda-entrypoint.sh' "${LAYERS_DIR}/launch.toml" 2>/dev/null; then
-    pass "launch.toml uses lambda-entrypoint.sh"
+if grep -q 'command' "${LAYERS_DIR}/launch.toml" 2>/dev/null; then
+    pass "launch.toml has command defined"
 else
-    fail "launch.toml missing lambda-entrypoint.sh command"
+    fail "launch.toml missing command"
 fi
 
 if grep -q 'public/index.php' "${LAYERS_DIR}/launch.toml" 2>/dev/null; then
