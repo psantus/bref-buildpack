@@ -1,0 +1,314 @@
+#!/usr/bin/env bash
+set -eo pipefail
+
+# =============================================================================
+# Bref PHP Lambda Buildpack - Build Phase
+#
+# This script:
+#   1. Installs Bref extra PHP extensions (cached layer)
+#   2. Configures OPcache/JIT for Lambda cold start optimization
+#   3. Runs composer install with production optimizations (cached layer)
+#   4. Optionally runs vendor shrink scripts
+#   5. Detects and warms Symfony cache (if applicable)
+#   6. Copies application to /var/task
+#   7. Sets the launch command
+# =============================================================================
+
+echo "===> Bref PHP Lambda Buildpack"
+
+# --- Configuration from env vars ---
+PHP_VERSION="${BP_PHP_VERSION:-84}"
+BREF_EXTENSIONS="${BP_BREF_EXTENSIONS:-}"
+BREF_RUNTIME="${BP_BREF_RUNTIME:-function}"
+COMPOSER_FLAGS="${BP_COMPOSER_FLAGS:---no-dev --classmap-authoritative --no-scripts}"
+OPCACHE_ENABLE="${BP_OPCACHE_ENABLE:-true}"
+OPCACHE_JIT="${BP_OPCACHE_JIT:-false}"
+SYMFONY_WARMUP="${BP_SYMFONY_WARMUP:-auto}"
+HANDLER="${BP_HANDLER:-public/index.php}"
+VENDOR_SHRINK="${BP_VENDOR_SHRINK:-true}"
+BREF_MAJOR="3"
+
+# --- Helper functions ---
+log_step() { echo "-----> $1"; }
+log_info() { echo "       $1"; }
+
+# =============================================================================
+# STEP 1: PHP Extensions Layer
+# =============================================================================
+extensions_layer="${CNB_LAYERS_DIR}/extensions"
+mkdir -p "${extensions_layer}"
+
+if [[ -n "${BREF_EXTENSIONS}" ]]; then
+    log_step "Installing Bref extra PHP extensions: ${BREF_EXTENSIONS}"
+
+    # Check if cached extensions match current config
+    cached_extensions=$(cat "${CNB_LAYERS_DIR}/extensions.toml" 2>/dev/null | grep 'extensions =' | cut -d'"' -f2 || echo "")
+
+    if [[ "${cached_extensions}" == "${BREF_EXTENSIONS}" ]]; then
+        log_info "Reusing cached extensions layer"
+    else
+        # Install extensions from bref-extra Docker images
+        IFS=',' read -ra EXTS <<< "${BREF_EXTENSIONS}"
+        for ext in "${EXTS[@]}"; do
+            ext=$(echo "${ext}" | xargs)  # trim whitespace
+            ext_image="bref/extra-${ext}-php-${PHP_VERSION}:${BREF_MAJOR}"
+            log_info "Installing extension: ${ext} (from ${ext_image})"
+
+            # Create a temporary container and copy /opt contents
+            container_id=$(docker create "${ext_image}" /bin/true 2>/dev/null || true)
+            if [[ -n "${container_id}" ]]; then
+                docker cp "${container_id}:/opt/." "${extensions_layer}/" 2>/dev/null || true
+                docker rm "${container_id}" >/dev/null 2>&1 || true
+            else
+                # Fallback: if docker is not available (e.g., in a CNB build environment),
+                # check if the extension files are already in the build image
+                log_info "  WARNING: Cannot pull extension image. Skipping ${ext}."
+                log_info "  Ensure your build image includes this extension or use a custom builder."
+            fi
+        done
+    fi
+
+    # Mark layer as cached and available at launch
+    cat > "${CNB_LAYERS_DIR}/extensions.toml" << EOL
+[types]
+cache = true
+launch = true
+build = true
+
+[metadata]
+extensions = "${BREF_EXTENSIONS}"
+php_version = "${PHP_VERSION}"
+EOL
+else
+    log_step "No extra extensions requested (BP_BREF_EXTENSIONS is empty)"
+    # Still create the layer toml so lifecycle doesn't complain
+    cat > "${CNB_LAYERS_DIR}/extensions.toml" << EOL
+[types]
+cache = false
+launch = false
+build = false
+EOL
+fi
+
+# =============================================================================
+# STEP 2: OPcache Configuration Layer
+# =============================================================================
+if [[ "${OPCACHE_ENABLE}" == "true" ]]; then
+    log_step "Configuring OPcache for Lambda"
+
+    opcache_layer="${CNB_LAYERS_DIR}/opcache"
+    mkdir -p "${opcache_layer}/etc/php/conf.d"
+
+    cat > "${opcache_layer}/etc/php/conf.d/opcache-buildpack.ini" << EOL
+opcache.enable=1
+opcache.enable_cli=1
+opcache.memory_consumption=1024
+opcache.max_accelerated_files=20000
+opcache.validate_timestamps=0
+opcache.preload_user=nobody
+EOL
+
+    if [[ "${OPCACHE_JIT}" == "true" ]]; then
+        log_info "JIT enabled (opcache.jit=1255, buffer=128M)"
+        cat >> "${opcache_layer}/etc/php/conf.d/opcache-buildpack.ini" << EOL
+opcache.jit=1255
+opcache.jit_buffer_size=128M
+EOL
+    fi
+
+    # Also write to the Bref PHP ini scan directory for immediate pickup
+    if [[ -d "/opt/bref/etc/php/conf.d" ]]; then
+        cp "${opcache_layer}/etc/php/conf.d/opcache-buildpack.ini" /opt/bref/etc/php/conf.d/opcache-buildpack.ini
+    fi
+
+    cat > "${CNB_LAYERS_DIR}/opcache.toml" << EOL
+[types]
+cache = true
+launch = true
+
+[metadata]
+jit = "${OPCACHE_JIT}"
+EOL
+fi
+
+# =============================================================================
+# STEP 3: Composer Install Layer (cached)
+# =============================================================================
+log_step "Running composer install"
+
+vendor_layer="${CNB_LAYERS_DIR}/vendor"
+mkdir -p "${vendor_layer}"
+
+# Calculate composer.lock checksum for cache invalidation
+composer_lock_sha=""
+if [[ -f "composer.lock" ]]; then
+    composer_lock_sha=$(sha256sum composer.lock | cut -d' ' -f1)
+elif [[ -f "composer.json" ]]; then
+    composer_lock_sha=$(sha256sum composer.json | cut -d' ' -f1)
+fi
+
+cached_lock_sha=$(cat "${CNB_LAYERS_DIR}/vendor.toml" 2>/dev/null | grep 'lock_sha =' | cut -d'"' -f2 || echo "")
+
+if [[ "${composer_lock_sha}" == "${cached_lock_sha}" && -d "${vendor_layer}/vendor" ]]; then
+    log_info "Reusing cached vendor layer (composer.lock unchanged)"
+    # Symlink vendor from cache
+    ln -sf "${vendor_layer}/vendor" vendor
+else
+    log_info "Installing dependencies: composer install ${COMPOSER_FLAGS}"
+
+    # If composer is available, run install
+    if command -v composer &>/dev/null; then
+        # shellcheck disable=SC2086
+        composer install ${COMPOSER_FLAGS} --no-interaction --prefer-dist 2>&1 | while read -r line; do
+            echo "       ${line}"
+        done
+    else
+        log_info "WARNING: composer not found in build image. Ensure build image has composer."
+        exit 1
+    fi
+
+    # Move vendor to the layer for caching
+    if [[ -d "vendor" ]]; then
+        rm -rf "${vendor_layer}/vendor"
+        cp -a vendor "${vendor_layer}/vendor"
+    fi
+fi
+
+# --- Vendor shrink ---
+if [[ "${VENDOR_SHRINK}" == "true" ]]; then
+    if command -v composer &>/dev/null; then
+        # Check if shrink-vendor script exists in composer.json
+        has_shrink=$(jq -r '.scripts["shrink-vendor"] // empty' composer.json 2>/dev/null || echo "")
+        if [[ -n "${has_shrink}" ]]; then
+            log_info "Running vendor shrink script"
+            composer run-script shrink-vendor 2>&1 | while read -r line; do
+                echo "       ${line}"
+            done
+            # Update cached vendor after shrink
+            rm -rf "${vendor_layer}/vendor"
+            cp -a vendor "${vendor_layer}/vendor"
+        fi
+    fi
+fi
+
+cat > "${CNB_LAYERS_DIR}/vendor.toml" << EOL
+[types]
+cache = true
+launch = true
+
+[metadata]
+lock_sha = "${composer_lock_sha}"
+EOL
+
+# =============================================================================
+# STEP 4: Symfony Detection & Cache Warmup
+# =============================================================================
+is_symfony=false
+if [[ -f "bin/console" ]] || [[ -f "symfony.lock" ]]; then
+    is_symfony=true
+fi
+
+if [[ "${is_symfony}" == "true" && ("${SYMFONY_WARMUP}" == "true" || "${SYMFONY_WARMUP}" == "auto") ]]; then
+    log_step "Detected Symfony application — warming cache"
+
+    symfony_layer="${CNB_LAYERS_DIR}/symfony-cache"
+    mkdir -p "${symfony_layer}"
+
+    # Create var directories
+    mkdir -p var/cache var/log
+
+    # Dump env if .env file exists
+    if [[ -f ".env" ]] && command -v composer &>/dev/null; then
+        log_info "Dumping .env for production"
+        composer dump-env prod 2>/dev/null || true
+    fi
+
+    # Warm up the Symfony DI container
+    if command -v php &>/dev/null; then
+        log_info "Running cache:warmup --env=prod"
+        php -d memory_limit=512M bin/console cache:warmup --env=prod 2>&1 | while read -r line; do
+            echo "       ${line}"
+        done || log_info "WARNING: cache:warmup failed (may need DATABASE_URL or other env vars)"
+
+        # Install assets
+        if [[ -d "public" ]]; then
+            log_info "Installing assets"
+            mkdir -p public/bundles
+            php -d memory_limit=512M bin/console assets:install public --no-interaction --env=prod 2>/dev/null || true
+        fi
+    fi
+
+    cat > "${CNB_LAYERS_DIR}/symfony-cache.toml" << EOL
+[types]
+cache = false
+launch = true
+
+[metadata]
+framework = "symfony"
+EOL
+fi
+
+# =============================================================================
+# STEP 5: Application Layer
+# =============================================================================
+log_step "Preparing application for Lambda"
+
+app_layer="${CNB_LAYERS_DIR}/app"
+mkdir -p "${app_layer}"
+
+# The application source is already in the workspace.
+# For Lambda, the handler expects code at /var/task which is the default WORKDIR in Bref images.
+# The CNB lifecycle will place the app layer appropriately.
+
+cat > "${CNB_LAYERS_DIR}/app.toml" << EOL
+[types]
+cache = false
+launch = true
+EOL
+
+# =============================================================================
+# STEP 6: Launch Configuration
+# =============================================================================
+log_step "Setting launch process (handler: ${HANDLER}, runtime: ${BREF_RUNTIME})"
+
+# Set BREF_RUNTIME environment variable for the run image
+# CNB requires env files inside a named layer
+mkdir -p "${CNB_LAYERS_DIR}/config/env.launch"
+echo -n "${BREF_RUNTIME}" > "${CNB_LAYERS_DIR}/config/env.launch/BREF_RUNTIME"
+# Override LAMBDA_TASK_ROOT so Bref finds the app at CNB's workspace path
+echo -n "/workspace" > "${CNB_LAYERS_DIR}/config/env.launch/LAMBDA_TASK_ROOT.default"
+
+cat > "${CNB_LAYERS_DIR}/config.toml" << EOL
+[types]
+cache = false
+launch = true
+EOL
+
+# Write launch.toml with process types
+cat > "${CNB_LAYERS_DIR}/launch.toml" << EOL
+[[processes]]
+type = "web"
+command = ["${HANDLER}"]
+default = true
+
+[[processes]]
+type = "console"
+command = ["bin/console"]
+
+[[processes]]
+type = "worker"
+command = ["bin/consumer.php"]
+EOL
+
+# =============================================================================
+# Summary
+# =============================================================================
+echo ""
+echo "===> Build complete!"
+echo "     PHP Version:  ${PHP_VERSION}"
+echo "     Runtime:      ${BREF_RUNTIME}"
+echo "     Handler:      ${HANDLER}"
+echo "     Extensions:   ${BREF_EXTENSIONS:-none}"
+echo "     OPcache:      ${OPCACHE_ENABLE} (JIT: ${OPCACHE_JIT})"
+echo "     Symfony:      ${is_symfony}"
+echo ""

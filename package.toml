@@ -1,0 +1,20 @@
+# =============================================================================
+# package.toml - Package this buildpack for distribution
+#
+# Usage:
+#   pack buildpack package bref/php-lambda --config package.toml
+#
+# This creates a distributable OCI image containing the buildpack.
+# =============================================================================
+
+[buildpack]
+  uri = "."
+
+# For multi-platform support
+[[targets]]
+  os = "linux"
+  arch = "amd64"
+
+[[targets]]
+  os = "linux"
+  arch = "arm64"

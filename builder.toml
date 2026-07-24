@@ -1,0 +1,49 @@
+# =============================================================================
+# Bref Builder Configuration
+#
+# This defines a builder that uses Bref container images as both build and run
+# base images. The build image has compilation tools for extensions, the run
+# image is the minimal Lambda runtime.
+#
+# Usage:
+#   1. Build the stack images:
+#        docker build -f stack/build.Dockerfile -t bref-buildpack/build .
+#        docker build -f stack/run.Dockerfile -t bref-buildpack/run .
+#
+#   2. Create the builder:
+#        pack builder create bref-builder --config builder.toml
+#
+#   3. Build apps with:
+#        pack build my-lambda-image --builder bref-builder --path ./my-php-app
+#
+# To switch PHP versions, rebuild the stack with a different base image,
+# or use the image extension.
+# =============================================================================
+
+[lifecycle]
+  version = "0.20.6"
+
+# Build image: has compilation tools (phpize, make, etc.) + composer + jq
+[build]
+  image = "bref-buildpack/build"
+
+# Run image: minimal Lambda runtime (Bref bootstrap + PHP)
+[run]
+  [[run.images]]
+    image = "bref-buildpack/run"
+
+# Stack ID (matches labels on build/run images)
+[stack]
+  id = "io.bref.lambda"
+  build-image = "bref-buildpack/build"
+  run-image = "bref-buildpack/run"
+
+# Buildpacks included in this builder
+[[buildpacks]]
+  uri = "docker://bref-php-lambda"
+
+# Buildpack order
+[[order]]
+  [[order.group]]
+    id = "bref/php-lambda"
+    version = "0.1.0"

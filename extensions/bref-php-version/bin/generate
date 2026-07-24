@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+set -eo pipefail
+
+# =============================================================================
+# Bref PHP Version Extension - Generate
+#
+# Generates a run.Dockerfile that switches the run image to the correct
+# Bref PHP version. This enables dynamic PHP version selection at build time.
+#
+# Supported versions: 82, 83, 84
+# Supported architectures: arm64 (Graviton), amd64
+# =============================================================================
+
+PHP_VERSION="${BP_PHP_VERSION:-84}"
+BREF_MAJOR="3"
+ARCH_PREFIX="${BP_BREF_ARCH:-arm}"  # "arm" for Graviton, "" for x86
+
+# Determine the run image name
+if [[ "${ARCH_PREFIX}" == "arm" ]]; then
+    RUN_IMAGE="bref/arm-php-${PHP_VERSION}:${BREF_MAJOR}"
+    BUILD_IMAGE="bref/arm-build-php-${PHP_VERSION}:${BREF_MAJOR}"
+else
+    RUN_IMAGE="bref/php-${PHP_VERSION}:${BREF_MAJOR}"
+    BUILD_IMAGE="bref/build-php-${PHP_VERSION}:${BREF_MAJOR}"
+fi
+
+echo "  [bref/php-version] Switching run image to: ${RUN_IMAGE}"
+
+# --- Generate run.Dockerfile ---
+# This Dockerfile switches the run base image to the requested Bref version
+cat > "${CNB_OUTPUT_DIR}/run.Dockerfile" << EOL
+ARG base_image
+FROM \${base_image}
+
+# Switch to the Bref PHP ${PHP_VERSION} runtime image
+# This image includes the Lambda bootstrap and PHP ${PHP_VERSION}
+FROM ${RUN_IMAGE}
+
+# Required CNB labels and user configuration
+USER root
+EOL
+
+# --- Generate build.Dockerfile (optional) ---
+# If we also need to switch the build image for extension compilation
+cat > "${CNB_OUTPUT_DIR}/build.Dockerfile" << EOL
+ARG base_image
+FROM \${base_image}
+
+# Ensure build tools match the target PHP version
+FROM ${BUILD_IMAGE}
+EOL
+
+echo "  [bref/php-version] Generated Dockerfiles for PHP ${PHP_VERSION} (${ARCH_PREFIX})"

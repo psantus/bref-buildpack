@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+set -eo pipefail
+
+# =============================================================================
+# Bref PHP Lambda Buildpack - Detect Phase
+#
+# Detects if the application is a PHP app suitable for Bref Lambda deployment.
+# Detection passes if:
+#   1. A composer.json exists
+#   2. It requires bref/bref (or the app has a .bref marker file)
+#
+# Provides: php, bref
+# Requires: php (with version metadata from composer.json or BP_PHP_VERSION)
+# =============================================================================
+
+APP_DIR="."
+
+# --- Check for composer.json ---
+if [[ ! -f "${APP_DIR}/composer.json" ]]; then
+    echo "  [bref/php-lambda] No composer.json found"
+    exit 100
+fi
+
+# --- Check for Bref dependency ---
+has_bref=false
+
+# Check in require or require-dev
+if command -v jq &>/dev/null; then
+    if jq -e '.require["bref/bref"] // .["require-dev"]["bref/bref"]' "${APP_DIR}/composer.json" &>/dev/null; then
+        has_bref=true
+    fi
+else
+    # Fallback: grep-based detection
+    if grep -q '"bref/bref"' "${APP_DIR}/composer.json"; then
+        has_bref=true
+    fi
+fi
+
+# Allow explicit opt-in via marker file
+if [[ -f "${APP_DIR}/.bref" ]]; then
+    has_bref=true
+fi
+
+if [[ "${has_bref}" != "true" ]]; then
+    echo "  [bref/php-lambda] composer.json found but no bref/bref dependency"
+    exit 100
+fi
+
+# --- Determine PHP version ---
+php_version="${BP_PHP_VERSION:-84}"
+
+# Try to extract from composer.json require.php constraint
+if command -v jq &>/dev/null && [[ -z "${BP_PHP_VERSION:-}" ]]; then
+    php_constraint=$(jq -r '.require.php // empty' "${APP_DIR}/composer.json" 2>/dev/null)
+    if [[ -n "${php_constraint}" ]]; then
+        # Extract major.minor from constraints like ">=8.4", "^8.3", "~8.2"
+        if [[ "${php_constraint}" =~ 8\.4 ]]; then
+            php_version="84"
+        elif [[ "${php_constraint}" =~ 8\.3 ]]; then
+            php_version="83"
+        elif [[ "${php_constraint}" =~ 8\.2 ]]; then
+            php_version="82"
+        fi
+    fi
+fi
+
+# --- Determine Bref runtime ---
+bref_runtime="${BP_BREF_RUNTIME:-function}"
+
+# --- Write Build Plan ---
+cat > "${CNB_BUILD_PLAN_PATH}" << EOL
+[[provides]]
+name = "php"
+
+[[provides]]
+name = "bref"
+
+[[requires]]
+name = "php"
+
+  [requires.metadata]
+  version = "${php_version}"
+
+[[requires]]
+name = "bref"
+
+  [requires.metadata]
+  runtime = "${bref_runtime}"
+EOL
+
+echo "  [bref/php-lambda] Detected Bref PHP ${php_version} app (runtime: ${bref_runtime})"

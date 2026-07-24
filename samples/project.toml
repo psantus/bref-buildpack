@@ -1,0 +1,75 @@
+# =============================================================================
+# project.toml - Bref PHP Lambda Buildpack Configuration
+#
+# Place this file in the root of your PHP application to configure
+# how the buildpack builds your Lambda container image.
+#
+# Usage:
+#   pack build my-lambda \
+#     --builder bref-builder \
+#     --path .
+#
+# The buildpack reads BP_* env vars from this file or from --env flags.
+# =============================================================================
+
+[_]
+schema-version = "0.2"
+
+[io.buildpacks]
+  # Specify which buildpacks to use (optional if using a pre-configured builder)
+  # [[io.buildpacks.group]]
+  #   id = "bref/php-lambda"
+
+  # Build-time environment variables
+  [io.buildpacks.build.env]
+    # PHP version: 82, 83, or 84
+    BP_PHP_VERSION = "84"
+
+    # Bref runtime type: function (event-driven), fpm (HTTP via API Gateway), or console
+    BP_BREF_RUNTIME = "function"
+
+    # Lambda handler entrypoint
+    BP_HANDLER = "public/index.php"
+
+    # Comma-separated list of bref-extra extensions to install
+    # Full list: https://github.com/brefphp/extra-php-extensions
+    # Common: redis, gd, imagick, pgsql, mongodb, amqp, grpc, imap, ldap, uuid, yaml
+    BP_BREF_EXTENSIONS = "redis,gd"
+
+    # Composer install flags
+    BP_COMPOSER_FLAGS = "--no-dev --classmap-authoritative --no-scripts"
+
+    # OPcache configuration
+    BP_OPCACHE_ENABLE = "true"
+    BP_OPCACHE_JIT = "true"
+
+    # Symfony cache warmup (auto, true, false)
+    # "auto" detects Symfony and warms cache if found
+    BP_SYMFONY_WARMUP = "auto"
+
+    # Run composer shrink-vendor script if defined
+    BP_VENDOR_SHRINK = "true"
+
+    # Architecture prefix for Bref images: "arm" (Graviton) or "" (x86_64)
+    BP_BREF_ARCH = "arm"
+
+# Files/directories to exclude from the build context
+# Reduces image size and build time
+[io.buildpacks.build]
+  exclude = [
+    ".git",
+    ".github",
+    ".idea",
+    "node_modules",
+    "tests",
+    "var/cache",
+    "var/log",
+    "docker-compose*.yml",
+    "Dockerfile*",
+    "*.md",
+    "phpunit*.xml*",
+    "phpstan*",
+    ".php-cs-fixer*",
+    ".env.local",
+    ".env.test",
+  ]

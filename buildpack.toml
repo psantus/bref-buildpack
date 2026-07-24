@@ -1,0 +1,71 @@
+# Buildpack API version
+api = "0.10"
+
+[buildpack]
+  id = "bref/php-lambda"
+  version = "0.1.0"
+  name = "Bref PHP Lambda Buildpack"
+  homepage = "https://github.com/brefphp/bref-buildpack"
+  description = "Builds PHP applications for AWS Lambda using Bref v3 container images"
+  keywords = ["php", "bref", "lambda", "aws", "serverless", "symfony"]
+
+  [[buildpack.licenses]]
+    type = "MIT"
+
+# Targets: Linux ARM64 (Lambda Graviton) and AMD64
+[[targets]]
+  os = "linux"
+  arch = "amd64"
+
+[[targets]]
+  os = "linux"
+  arch = "arm64"
+
+# Configuration metadata (documentation for users)
+[metadata]
+
+  [metadata.configurations]
+    [[metadata.configurations.env]]
+      name = "BP_PHP_VERSION"
+      description = "PHP version to use (82, 83, 84). Determines which Bref base image is used."
+      default = "84"
+
+    [[metadata.configurations.env]]
+      name = "BP_BREF_EXTENSIONS"
+      description = "Comma-separated list of Bref extra extensions to install (e.g., redis,gd,imagick)"
+      default = ""
+
+    [[metadata.configurations.env]]
+      name = "BP_BREF_RUNTIME"
+      description = "Bref runtime type: function, fpm, or console"
+      default = "function"
+
+    [[metadata.configurations.env]]
+      name = "BP_COMPOSER_FLAGS"
+      description = "Additional flags for composer install"
+      default = "--no-dev --classmap-authoritative --no-scripts"
+
+    [[metadata.configurations.env]]
+      name = "BP_OPCACHE_ENABLE"
+      description = "Enable OPcache optimization for Lambda"
+      default = "true"
+
+    [[metadata.configurations.env]]
+      name = "BP_OPCACHE_JIT"
+      description = "Enable JIT compilation (PHP 8.1+)"
+      default = "false"
+
+    [[metadata.configurations.env]]
+      name = "BP_SYMFONY_WARMUP"
+      description = "Run Symfony cache warmup during build"
+      default = "auto"
+
+    [[metadata.configurations.env]]
+      name = "BP_HANDLER"
+      description = "Lambda handler entrypoint (e.g., public/index.php, bin/console)"
+      default = "public/index.php"
+
+    [[metadata.configurations.env]]
+      name = "BP_VENDOR_SHRINK"
+      description = "Run vendor shrink script if available in composer.json"
+      default = "true"

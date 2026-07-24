@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -eo pipefail
+
+# =============================================================================
+# Bref PHP Version Extension - Detect
+#
+# Always passes detection when BP_PHP_VERSION is set.
+# Provides the "bref-runtime" dependency.
+# =============================================================================
+
+# Only activate if the user explicitly sets a non-default PHP version
+# or if composer.json requests a specific PHP version
+if [[ -n "${BP_PHP_VERSION:-}" ]]; then
+    cat > "${CNB_BUILD_PLAN_PATH}" << EOL
+[[provides]]
+name = "bref-runtime"
+
+[[requires]]
+name = "bref-runtime"
+
+  [requires.metadata]
+  php_version = "${BP_PHP_VERSION}"
+EOL
+    exit 0
+fi
+
+# Check composer.json for PHP version constraint
+if [[ -f "composer.json" ]] && command -v jq &>/dev/null; then
+    php_constraint=$(jq -r '.require.php // empty' composer.json 2>/dev/null)
+    if [[ -n "${php_constraint}" ]]; then
+        cat > "${CNB_BUILD_PLAN_PATH}" << EOL
+[[provides]]
+name = "bref-runtime"
+
+[[requires]]
+name = "bref-runtime"
+
+  [requires.metadata]
+  php_constraint = "${php_constraint}"
+EOL
+        exit 0
+    fi
+fi
+
+# Don't participate if no PHP version switching needed
+exit 100
