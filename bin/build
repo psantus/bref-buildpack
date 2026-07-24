@@ -69,16 +69,18 @@ if [[ -n "${BREF_EXTENSIONS}" ]]; then
 
             # Method 1: Use crane (preferred for CI — no Docker daemon needed)
             if command -v crane &>/dev/null; then
-                log_info "  Using crane to extract image layers"
-                if crane export "${ext_image}" --platform "linux/${BREF_ARCH}" - 2>/dev/null | tar -xf - -C "${extensions_layer}/" opt/ 2>/dev/null; then
-                    # The bref-extra images are FROM scratch with /opt contents at root
-                    # crane export gives us the full filesystem; we extract /opt
-                    installed=true
-                else
-                    # Some images put files at root (not under /opt), try extracting everything
-                    if crane export "${ext_image}" --platform "linux/${BREF_ARCH}" - 2>/dev/null | tar -xf - -C "${extensions_layer}/" 2>/dev/null; then
-                        installed=true
+                log_info "  Using crane to extract extension"
+                # Export to a temp file first, then extract (avoids pipe exit code issues)
+                tmp_tar="/tmp/ext-${ext}.tar"
+                if crane export "${ext_image}" --platform "linux/${BREF_ARCH}" "${tmp_tar}" 2>/dev/null; then
+                    tar -xf "${tmp_tar}" -C "${extensions_layer}/" opt/ 2>/dev/null && installed=true
+                    rm -f "${tmp_tar}"
+                    if [[ "${installed}" == "true" ]]; then
+                        log_info "  ✓ Installed via crane"
                     fi
+                else
+                    log_info "  crane export failed (network unavailable or image not found)"
+                    rm -f "${tmp_tar}" 2>/dev/null
                 fi
             fi
 

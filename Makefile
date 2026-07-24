@@ -48,6 +48,10 @@ lambda: build
 	@echo 'FROM $(LAMBDA_IMAGE)' > /tmp/Dockerfile.lambda-flatten
 	@echo 'USER root' >> /tmp/Dockerfile.lambda-flatten
 	@echo 'RUN rm -rf /var/task && cp -a /workspace /var/task' >> /tmp/Dockerfile.lambda-flatten
+	@echo '# Copy extensions from CNB layer to /opt where Bref expects them (merge, not overwrite)' >> /tmp/Dockerfile.lambda-flatten
+	@echo 'RUN if [ -d /layers/bref_php-lambda/extensions/opt ]; then cp -an /layers/bref_php-lambda/extensions/opt/* /opt/ 2>/dev/null; cp -a /layers/bref_php-lambda/extensions/opt/bref/extensions/*.so /opt/bref/extensions/ 2>/dev/null; cp -a /layers/bref_php-lambda/extensions/opt/bref/etc/php/conf.d/*.ini /opt/bref/etc/php/conf.d/ 2>/dev/null; for f in /layers/bref_php-lambda/extensions/opt/lib/*; do [ -f "$$f" ] && cp -n "$$f" /opt/lib/ 2>/dev/null; done; fi' >> /tmp/Dockerfile.lambda-flatten
+	@echo '# Copy opcache config from CNB layer' >> /tmp/Dockerfile.lambda-flatten
+	@echo 'RUN if [ -d /layers/bref_php-lambda/opcache/opt ]; then cp -a /layers/bref_php-lambda/opcache/opt/bref/etc/php/conf.d/*.ini /opt/bref/etc/php/conf.d/ 2>/dev/null || true; fi' >> /tmp/Dockerfile.lambda-flatten
 	@echo 'ENTRYPOINT ["/lambda-entrypoint.sh"]' >> /tmp/Dockerfile.lambda-flatten
 	@echo 'CMD ["$(or $(BP_HANDLER),public/index.php)"]' >> /tmp/Dockerfile.lambda-flatten
 	@echo 'WORKDIR /var/task' >> /tmp/Dockerfile.lambda-flatten
