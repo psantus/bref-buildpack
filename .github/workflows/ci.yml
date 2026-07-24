@@ -34,7 +34,7 @@ jobs:
       - name: Create builder
         run: |
           pack buildpack package bref-php-lambda --config package.toml --format image --pull-policy if-not-present
-          pack builder create bref-builder --config builder.toml --pull-policy if-not-present --force
+          pack builder create bref-builder --config builder.toml --pull-policy if-not-present
 
       - name: Build sample app
         run: |
