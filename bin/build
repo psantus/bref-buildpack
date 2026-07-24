@@ -132,9 +132,10 @@ if [[ "${OPCACHE_ENABLE}" == "true" ]]; then
     opcache_layer="${CNB_LAYERS_DIR}/opcache"
     mkdir -p "${opcache_layer}"
 
-    # Write OPcache config directly to /opt/bref/etc/php/conf.d/ where PHP scans
-    # This path is set by extension_dir and PHP_INI_SCAN_DIR in the Bref base image
-    local_ini="/opt/bref/etc/php/conf.d/opcache-buildpack.ini"
+    # Write OPcache config to the layer directory.
+    # At runtime, this will be available via the layer path.
+    # We also try to write to /opt/bref/etc/php/conf.d/ if writable (build-time use).
+    local_ini="${opcache_layer}/opcache-buildpack.ini"
 
     cat > "${local_ini}" << EOL
 ; Buildpack OPcache configuration for Lambda cold start optimization
