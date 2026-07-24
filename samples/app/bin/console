@@ -1,0 +1,10 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+/**
+ * Minimal console script for Symfony detection test.
+ */
+
+echo "Bref sample console entrypoint\n";

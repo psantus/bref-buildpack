@@ -69,3 +69,8 @@ api = "0.10"
       name = "BP_VENDOR_SHRINK"
       description = "Run vendor shrink script if available in composer.json"
       default = "true"
+
+    [[metadata.configurations.env]]
+      name = "BP_BREF_ARCH"
+      description = "Target architecture for extension images (arm64 or amd64). Auto-detected if not set."
+      default = ""

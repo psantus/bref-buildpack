@@ -16,8 +16,11 @@
 #   3. Build apps with:
 #        pack build my-lambda-image --builder bref-builder --path ./my-php-app
 #
-# To switch PHP versions, rebuild the stack with a different base image,
-# or use the image extension.
+# PHP Version Selection:
+# The PHP version is determined by which Bref base images the stack uses.
+# To switch PHP versions, rebuild the stack images (stack/build.Dockerfile and
+# stack/run.Dockerfile) with a different Bref base image tag (e.g. bref/php-84,
+# bref/php-83). No image extension is needed — the base image IS the version.
 # =============================================================================
 
 [lifecycle]

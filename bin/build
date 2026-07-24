@@ -28,6 +28,17 @@ HANDLER="${BP_HANDLER:-public/index.php}"
 VENDOR_SHRINK="${BP_VENDOR_SHRINK:-true}"
 BREF_MAJOR="3"
 
+# Detect platform architecture (for multi-arch image references)
+if [[ -n "${BP_BREF_ARCH:-}" ]]; then
+    BREF_ARCH="${BP_BREF_ARCH}"
+else
+    case "$(uname -m)" in
+        aarch64) BREF_ARCH="arm64" ;;
+        x86_64)  BREF_ARCH="amd64" ;;
+        *)       BREF_ARCH="arm64" ;;  # default to arm64 (Graviton)
+    esac
+fi
+
 # --- Helper functions ---
 log_step() { echo "-----> $1"; }
 log_info() { echo "       $1"; }
@@ -54,16 +65,39 @@ if [[ -n "${BREF_EXTENSIONS}" ]]; then
             ext_image="bref/extra-${ext}-php-${PHP_VERSION}:${BREF_MAJOR}"
             log_info "Installing extension: ${ext} (from ${ext_image})"
 
-            # Create a temporary container and copy /opt contents
-            container_id=$(docker create "${ext_image}" /bin/true 2>/dev/null || true)
-            if [[ -n "${container_id}" ]]; then
-                docker cp "${container_id}:/opt/." "${extensions_layer}/" 2>/dev/null || true
-                docker rm "${container_id}" >/dev/null 2>&1 || true
-            else
-                # Fallback: if docker is not available (e.g., in a CNB build environment),
-                # check if the extension files are already in the build image
-                log_info "  WARNING: Cannot pull extension image. Skipping ${ext}."
-                log_info "  Ensure your build image includes this extension or use a custom builder."
+            installed=false
+
+            # Method 1: Use crane (preferred for CI — no Docker daemon needed)
+            if command -v crane &>/dev/null; then
+                log_info "  Using crane to extract image layers"
+                if crane export "${ext_image}" --platform "linux/${BREF_ARCH}" - 2>/dev/null | tar -xf - -C "${extensions_layer}/" opt/ 2>/dev/null; then
+                    # The bref-extra images are FROM scratch with /opt contents at root
+                    # crane export gives us the full filesystem; we extract /opt
+                    installed=true
+                else
+                    # Some images put files at root (not under /opt), try extracting everything
+                    if crane export "${ext_image}" --platform "linux/${BREF_ARCH}" - 2>/dev/null | tar -xf - -C "${extensions_layer}/" 2>/dev/null; then
+                        installed=true
+                    fi
+                fi
+            fi
+
+            # Method 2: Fall back to docker create + docker cp (requires Docker daemon)
+            if [[ "${installed}" == "false" ]] && command -v docker &>/dev/null; then
+                log_info "  Falling back to docker create + docker cp"
+                container_id=$(docker create --platform "linux/${BREF_ARCH}" "${ext_image}" /bin/true 2>/dev/null || true)
+                if [[ -n "${container_id}" ]]; then
+                    docker cp "${container_id}:/opt/." "${extensions_layer}/" 2>/dev/null || true
+                    docker rm "${container_id}" >/dev/null 2>&1 || true
+                    installed=true
+                fi
+            fi
+
+            # Method 3: Neither crane nor docker available
+            if [[ "${installed}" == "false" ]]; then
+                log_info "  WARNING: Neither crane nor docker available. Cannot install extension '${ext}'."
+                log_info "  Install crane (go-containerregistry) or ensure Docker daemon is running."
+                log_info "  Skipping ${ext}."
             fi
         done
     fi

@@ -1,0 +1,8 @@
+{
+    "name": "bref/sample-app",
+    "description": "Minimal sample app for CI testing",
+    "require": {
+        "php": ">=8.4",
+        "bref/bref": "^2.0"
+    }
+}

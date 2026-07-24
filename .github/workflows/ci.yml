@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pack CLI
+        uses: buildpacks/github-actions/setup-pack@v5.7.4
+
+      - name: Run unit tests
+        run: |
+          chmod +x tests/run_tests.sh
+          ./tests/run_tests.sh
+
+      - name: Build stack images
+        run: |
+          docker build -f stack/build.Dockerfile -t bref-buildpack/build .
+          docker build -f stack/run.Dockerfile -t bref-buildpack/run .
+
+      - name: Create builder
+        run: |
+          pack buildpack package bref-php-lambda --config package.toml --format image --pull-policy if-not-present
+          pack builder create bref-builder --config builder.toml --pull-policy if-not-present --force
+
+      - name: Build sample app
+        run: |
+          pack build bref-sample-app \
+            --builder bref-builder \
+            --path samples/app \
+            --pull-policy if-not-present \
+            --trust-builder
+
+      - name: Verify image was created
+        run: |
+          docker image inspect bref-sample-app > /dev/null 2>&1
+          echo "✅ bref-sample-app image created successfully"
+          docker images bref-sample-app --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}"
