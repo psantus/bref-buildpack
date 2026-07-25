@@ -95,11 +95,51 @@ if [[ -n "${BREF_EXTENSIONS}" ]]; then
                 fi
             fi
 
-            # Method 3: Neither crane nor docker available
+            # Method 3: Compile from source (ARM builds, or when crane/docker fail)
             if [[ "${installed}" == "false" ]]; then
-                log_info "  WARNING: Neither crane nor docker available. Cannot install extension '${ext}'."
-                log_info "  Install crane (go-containerregistry) or ensure Docker daemon is running."
-                log_info "  Skipping ${ext}."
+                RECIPES_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib/extension-recipes.sh"
+                if [[ -f "${RECIPES_FILE}" ]]; then
+                    # Source the recipes
+                    source "${RECIPES_FILE}"
+
+                    recipe_fn="recipe_${ext}"
+                    if declare -f "${recipe_fn}" > /dev/null 2>&1; then
+                        log_info "  Compiling from source (ARM)"
+                        mkdir -p "${EXT_OUTPUT}"
+
+                        if ${recipe_fn} 2>&1 | while read -r line; do echo "       ${line}"; done; then
+                            # Copy compiled extension to the layer
+                            if [[ -f "${EXT_OUTPUT}/${ext}.so" ]]; then
+                                mkdir -p "${extensions_layer}/opt/bref/extensions"
+                                mkdir -p "${extensions_layer}/opt/bref/etc/php/conf.d"
+                                mkdir -p "${extensions_layer}/opt/lib"
+
+                                cp "${EXT_OUTPUT}/${ext}.so" "${extensions_layer}/opt/bref/extensions/"
+                                cp "${EXT_OUTPUT}/${ext}.ini" "${extensions_layer}/opt/bref/etc/php/conf.d/ext-${ext}.ini" 2>/dev/null || true
+
+                                # Copy shared library dependencies
+                                if [[ -d "${EXT_OUTPUT}/${ext}-libs" ]]; then
+                                    cp -a "${EXT_OUTPUT}/${ext}-libs/"* "${extensions_layer}/opt/lib/" 2>/dev/null || true
+                                fi
+
+                                installed=true
+                                log_info "  ✓ Compiled and installed ${ext}.so"
+                            else
+                                log_info "  ERROR: Compilation succeeded but ${ext}.so not found"
+                            fi
+                        else
+                            log_info "  ERROR: Compilation failed for ${ext}"
+                        fi
+
+                        # Cleanup
+                        rm -rf "${EXT_OUTPUT}" 2>/dev/null || true
+                    else
+                        log_info "  WARNING: No build recipe for '${ext}'"
+                        log_info "  Add recipe_${ext}() to lib/extension-recipes.sh"
+                    fi
+                else
+                    log_info "  WARNING: Cannot install '${ext}' — no crane/docker and recipes file not found"
+                fi
             fi
         done
     fi

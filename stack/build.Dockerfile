@@ -3,8 +3,9 @@ FROM ${BREF_IMAGE}
 
 # CNB requires specific labels and environment variables
 LABEL io.buildpacks.stack.id="io.bref.lambda"
-ENV CNB_USER_ID=1000
-ENV CNB_GROUP_ID=1000
+# Run build phase as root to allow extension compilation (dnf install, make install)
+ENV CNB_USER_ID=0
+ENV CNB_GROUP_ID=0
 ENV CNB_STACK_ID="io.bref.lambda"
 
 # Detect architecture for downloading correct binaries
