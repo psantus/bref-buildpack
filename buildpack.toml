@@ -3,7 +3,7 @@ api = "0.10"
 
 [buildpack]
   id = "bref/php-lambda"
-  version = "0.1.0"
+  version = "0.2.0"
   name = "Bref PHP Lambda Buildpack"
   homepage = "https://github.com/brefphp/bref-buildpack"
   description = "Builds PHP applications for AWS Lambda using Bref v3 container images"
