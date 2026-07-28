@@ -5,7 +5,7 @@ api = "0.10"
   id = "bref/php-lambda"
   version = "0.2.0"
   name = "Bref PHP Lambda Buildpack"
-  homepage = "https://github.com/brefphp/bref-buildpack"
+  homepage = "https://github.com/psantus/bref-buildpack"
   description = "Builds PHP applications for AWS Lambda using Bref v3 container images"
   keywords = ["php", "bref", "lambda", "aws", "serverless", "symfony"]
 
